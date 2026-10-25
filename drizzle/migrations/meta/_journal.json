@@ -1,5 +1,13 @@
 {
   "version": "7",
   "dialect": "postgresql",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792913917407,
+      "tag": "0000_create_drone_alerts",
+      "breakpoints": true
+    }
+  ]
 }

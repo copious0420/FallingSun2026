@@ -14,7 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      drone_alerts: {
+        Row: {
+          coordinates: Json
+          created_at: string
+          drone_id: string
+          id: string
+          threat_level: string
+          timestamp: string
+        }
+        Insert: {
+          coordinates?: Json
+          created_at?: string
+          drone_id: string
+          id?: string
+          threat_level: string
+          timestamp?: string
+        }
+        Update: {
+          coordinates?: Json
+          created_at?: string
+          drone_id?: string
+          id?: string
+          threat_level?: string
+          timestamp?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

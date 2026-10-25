@@ -1,0 +1,367 @@
+import { supabase } from "@/integrations/supabase/client";
+
+export type ThreatLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+export type DroneFlag = "THREAT" | "SAFE" | null;
+
+export interface Zone {
+  id: string;
+  name: string;
+  cx: number;
+  cy: number;
+  r: number;
+  restricted: boolean;
+}
+
+export interface Drone {
+  id: string;
+  model: string;
+  x: number;
+  y: number;
+  tx: number;
+  ty: number;
+  heading: number;
+  speed: number;
+  cruise: number;
+  altitude: number;
+  battery: number;
+  signal: number;
+  threat: ThreatLevel;
+  flagged: DroneFlag;
+  speedHistory: number[];
+  altitudeHistory: number[];
+  waypointTicks: number;
+}
+
+export interface Alert {
+  id: string;
+  droneId: string;
+  level: ThreatLevel;
+  message: string;
+  timestamp: number;
+  coords: { x: number; y: number };
+}
+
+export interface SimSnapshot {
+  drones: Drone[];
+  alerts: Alert[];
+  clock: number;
+  version: number;
+}
+
+export const MAP_SIZE = 100;
+export const TICK_MS = 1000;
+export const HISTORY_LEN = 60;
+
+export const ZONES: Zone[] = [
+  { id: "alpha", name: "ALPHA", cx: 30, cy: 34, r: 14, restricted: true },
+  { id: "bravo", name: "BRAVO", cx: 72, cy: 28, r: 12, restricted: true },
+  { id: "charlie", name: "CHARLIE", cx: 62, cy: 72, r: 10, restricted: true },
+  { id: "delta", name: "DELTA", cx: 22, cy: 76, r: 15, restricted: false },
+];
+
+const RESTRICTED = ZONES.filter((z) => z.restricted);
+
+const THREAT_RANK: Record<ThreatLevel, number> = {
+  LOW: 0,
+  MEDIUM: 1,
+  HIGH: 2,
+  CRITICAL: 3,
+};
+
+/* ---------- deterministic PRNG so SSR and client hydrate identically ---------- */
+function mulberry32(seed: number) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const rand = mulberry32(1337);
+
+const CRUISES = [38, 62, 74, 96, 122, 47, 88, 108, 56];
+const MODELS = [
+  "QUAD-4X",
+  "FIXED-WING RQ-11",
+  "VTOL-X2",
+  "ROTOR-6",
+  "SWARM-U3",
+  "QUAD-4X",
+  "FIXED-WING RQ-11",
+  "VTOL-X2",
+  "ROTOR-6",
+];
+
+function dist(x1: number, y1: number, x2: number, y2: number) {
+  return Math.hypot(x2 - x1, y2 - y1);
+}
+
+function zoneAt(x: number, y: number): Zone | null {
+  return RESTRICTED.find((z) => dist(x, y, z.cx, z.cy) <= z.r) ?? null;
+}
+export { zoneAt };
+
+function threatFor(x: number, y: number, speed: number): ThreatLevel {
+  const z = zoneAt(x, y);
+  if (z && speed > 80) return "CRITICAL";
+  if (z) return "HIGH";
+  if (speed > 100) return "HIGH";
+  const approaching = RESTRICTED.some((zz) => dist(x, y, zz.cx, zz.cy) <= zz.r + 16);
+  if (approaching || speed > 85) return "MEDIUM";
+  return "LOW";
+}
+
+/* ---------- store ---------- */
+const drones: Drone[] = [];
+const alerts: Alert[] = [];
+let listeners = new Set<() => void>();
+let intervalId: ReturnType<typeof setInterval> | null = null;
+let version = 0;
+let snapshot: SimSnapshot | null = null;
+
+function makeDrone(i: number): Drone {
+  const x = 5 + rand() * 90;
+  const y = 5 + rand() * 90;
+  const tx = 5 + rand() * 90;
+  const ty = 5 + rand() * 90;
+  const speed = (CRUISES[i] ?? 60) + (rand() - 0.5) * 14;
+  const alt0 = 70 + rand() * 340;
+  let altWalk = alt0;
+  let spdWalk = Math.max(10, Math.round(speed + (rand() - 0.5) * 12));
+  return {
+    id: `DRONE-00${i + 1}`,
+    model: MODELS[i] ?? "QUAD-4X",
+    x,
+    y,
+    tx,
+    ty,
+    heading: (Math.atan2(ty - y, tx - x) * 180) / Math.PI,
+    speed,
+    cruise: CRUISES[i] ?? 60,
+    altitude: alt0,
+    battery: 58 + rand() * 40,
+    signal: 70 + rand() * 28,
+    threat: threatFor(x, y, speed),
+    flagged: null,
+    speedHistory: Array.from({ length: HISTORY_LEN }, () => {
+      spdWalk = Math.min(160, Math.max(10, spdWalk + (rand() - 0.5) * 14));
+      return Math.round(spdWalk);
+    }),
+    altitudeHistory: Array.from({ length: HISTORY_LEN }, () => {
+      altWalk = Math.min(540, Math.max(50, altWalk + (rand() - 0.5) * 26));
+      return Math.round(altWalk);
+    }),
+    waypointTicks: 8 + Math.floor(rand() * 18),
+  };
+}
+
+for (let i = 0; i < 9; i++) drones.push(makeDrone(i));
+
+let alertSeq = 0;
+function makeAlert(
+  level: ThreatLevel,
+  droneId: string,
+  message: string,
+  coords: { x: number; y: number },
+  timestamp = Date.now(),
+): Alert {
+  return { id: `ALERT-${String(++alertSeq).padStart(4, "0")}`, droneId, level, message, timestamp, coords };
+}
+
+/* seed the feed with plausible prior activity so the ops floor opens live */
+const t0 = Date.now();
+alerts.push(
+  makeAlert("HIGH", "DRONE-004", "DRONE-004 inside restricted Zone BRAVO — sustained track", { x: 71.2, y: 27.4 }, t0 - 412000),
+  makeAlert("MEDIUM", "DRONE-007", "DRONE-007 approaching Zone ALPHA perimeter — 14.2 km out", { x: 38.1, y: 33.9 }, t0 - 267000),
+  makeAlert("LOW", "DRONE-002", "DRONE-002 cleared Zone DELTA corridor — returning patrol", { x: 21.8, y: 74.6 }, t0 - 98000),
+);
+
+function persistAlert(alert: Alert) {
+  if (typeof window === "undefined") return;
+  supabase
+    .from("drone_alerts")
+    .insert({
+      drone_id: alert.droneId,
+      threat_level: alert.level,
+      timestamp: new Date(alert.timestamp).toISOString(),
+      coordinates: { x: Math.round(alert.coords.x * 10) / 10, y: Math.round(alert.coords.y * 10) / 10 },
+    })
+    .then(({ error }) => {
+      if (error) console.warn("[skywatch] alert log failed:", error.message);
+    });
+}
+
+function pushAlert(alert: Alert, persist: boolean) {
+  alerts.unshift(alert);
+  if (alerts.length > 60) alerts.length = 60;
+  if (persist) persistAlert(alert);
+}
+
+function tick() {
+  for (const d of drones) {
+    const dx = d.tx - d.x;
+    const dy = d.ty - d.y;
+    const travel = Math.hypot(dx, dy);
+    if (travel < 1.5 || d.waypointTicks <= 0) {
+      d.tx = 5 + Math.random() * 90;
+      d.ty = 5 + Math.random() * 90;
+      d.waypointTicks = 12 + Math.floor(Math.random() * 20);
+    } else {
+      const step = Math.min(travel, d.speed / 120);
+      d.x += (dx / travel) * step;
+      d.y += (dy / travel) * step;
+      d.waypointTicks -= 1;
+    }
+    d.heading = (((Math.atan2(d.ty - d.y, d.tx - d.x) * 180) / Math.PI) + 360) % 360;
+    d.speed = Math.min(165, Math.max(12, d.speed + (d.cruise - d.speed) * 0.06 + (Math.random() - 0.5) * 5));
+    d.altitude = Math.min(560, Math.max(40, d.altitude + (Math.random() - 0.5) * 14));
+    d.signal = Math.min(99, Math.max(38, d.signal + (Math.random() - 0.5) * 6));
+    d.battery = Math.max(11, d.battery - 0.012);
+
+    d.speedHistory.push(Math.round(d.speed));
+    if (d.speedHistory.length > HISTORY_LEN) d.speedHistory.shift();
+    d.altitudeHistory.push(Math.round(d.altitude));
+    if (d.altitudeHistory.length > HISTORY_LEN) d.altitudeHistory.shift();
+
+    const prev = d.threat;
+    const next = threatFor(d.x, d.y, d.speed);
+    d.threat = next;
+    if (THREAT_RANK[next] > THREAT_RANK[prev] && THREAT_RANK[next] >= 2) {
+      const z = zoneAt(d.x, d.y);
+      const spd = Math.round(d.speed);
+      let message: string;
+      if (next === "CRITICAL" && z) {
+        message = `${d.id} BREACH — entered restricted Zone ${z.name} at ${spd} km/h`;
+      } else if (z) {
+        message = `${d.id} inside restricted Zone ${z.name} — sustained track`;
+      } else if (spd > 100) {
+        message = `${d.id} velocity ${spd} km/h — erratic vector, tracking`;
+      } else {
+        message = `${d.id} track escalation — monitoring`;
+      }
+      pushAlert(makeAlert(next, d.id, message, { x: d.x, y: d.y }), true);
+    }
+  }
+  version += 1;
+  publish();
+}
+
+function publish() {
+  snapshot = {
+    drones: drones.map((d) => ({ ...d })),
+    alerts: [...alerts],
+    clock: Date.now(),
+    version,
+  };
+  listeners.forEach((cb) => cb());
+}
+
+function buildInitial(): SimSnapshot {
+  return { drones: drones.map((d) => ({ ...d })), alerts: [...alerts], clock: Date.now(), version };
+}
+
+export function subscribe(cb: () => void) {
+  listeners.add(cb);
+  if (intervalId === null && typeof window !== "undefined") {
+    intervalId = setInterval(tick, TICK_MS);
+  }
+  return () => {
+    listeners.delete(cb);
+    if (listeners.size === 0 && intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+  };
+}
+
+export function getSnapshot(): SimSnapshot {
+  if (!snapshot) snapshot = buildInitial();
+  return snapshot;
+}
+
+/* ---------- operator actions ---------- */
+export function effectiveThreat(d: Drone): ThreatLevel {
+  if (d.flagged === "THREAT") return "CRITICAL";
+  if (d.flagged === "SAFE") return "LOW";
+  return d.threat;
+}
+
+export function flagDrone(id: string, flag: Exclude<DroneFlag, null>) {
+  const d = drones.find((x) => x.id === id);
+  if (!d) return;
+  d.flagged = flag;
+  if (flag === "THREAT") {
+    pushAlert(
+      makeAlert("CRITICAL", d.id, `OPERATOR FLAG — ${d.id} designated hostile threat, weapons coordinate standby`, { x: d.x, y: d.y }),
+      true,
+    );
+  } else {
+    pushAlert(
+      makeAlert("LOW", d.id, `OPERATOR CLEAR — ${d.id} marked safe, threat assessment reset`, { x: d.x, y: d.y }),
+      true,
+    );
+  }
+  version += 1;
+  publish();
+}
+
+export function dispatchAlert(id: string) {
+  const d = drones.find((x) => x.id === id);
+  if (!d) return;
+  pushAlert(
+    makeAlert("CRITICAL", d.id, `DISPATCH — rapid-response unit vectoring to ${d.id} grid position`, { x: d.x, y: d.y }),
+    true,
+  );
+  version += 1;
+  publish();
+}
+
+/* ---------- prediction & formatting ---------- */
+export interface ZoneEta {
+  zone: Zone;
+  seconds: number;
+  inside: boolean;
+}
+
+export function nextZoneEta(d: Drone): ZoneEta | null {
+  let insideZone: Zone | null = null;
+  let best: ZoneEta | null = null;
+  const unitsPerTick = Math.max(d.speed, 12) / 120;
+  for (const z of RESTRICTED) {
+    const dd = dist(d.x, d.y, z.cx, z.cy);
+    if (dd <= z.r) {
+      insideZone = z;
+      break;
+    }
+    const seconds = Math.round((dd - z.r) / unitsPerTick);
+    if (!best || seconds < best.seconds) best = { zone: z, seconds, inside: false };
+  }
+  if (insideZone) return { zone: insideZone, seconds: 0, inside: true };
+  return best;
+}
+
+export function etaText(eta: ZoneEta | null): string {
+  if (!eta) return "No restricted-zone vector on current heading";
+  if (eta.inside) return `Currently inside Zone ${eta.zone.name} — restricted airspace`;
+  const m = Math.floor(eta.seconds / 60);
+  const s = eta.seconds % 60;
+  return `Estimated to reach Zone ${eta.zone.name} in ${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+export function gridRef(x: number, y: number): string {
+  const lat = 27.1 + (y / MAP_SIZE) * 0.5;
+  const lon = 77.1 + (x / MAP_SIZE) * 0.5;
+  return `${lat.toFixed(4)}N ${lon.toFixed(4)}E`;
+}
+
+export function fmtClock(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString("en-GB", { hour12: false });
+}
+
+export function fmtHeading(deg: number): string {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return `${String(Math.round(deg)).padStart(3, "0")}° ${dirs[Math.round(deg / 45) % 8]}`;
+}

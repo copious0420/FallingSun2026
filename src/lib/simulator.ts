@@ -412,7 +412,7 @@ export function gridRef(x: number, y: number): string {
 
 export function fmtClock(ts: number): string {
   const d = new Date(ts);
-  return d.toLocaleTimeString("en-GB", { hour12: false });
+  return d.toLocaleTimeString("en-GB", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export function fmtHeading(deg: number): string {

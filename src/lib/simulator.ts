@@ -101,6 +101,7 @@ function dist(x1: number, y1: number, x2: number, y2: number) {
 function zoneAt(x: number, y: number): Zone | null {
   return RESTRICTED.find((z) => dist(x, y, z.cx, z.cy) <= z.r) ?? null;
 }
+export { zoneAt };
 
 function threatFor(x: number, y: number, speed: number): ThreatLevel {
   const z = zoneAt(x, y);
@@ -125,17 +126,17 @@ function makeDrone(i: number): Drone {
   const y = 5 + rand() * 90;
   const tx = 5 + rand() * 90;
   const ty = 5 + rand() * 90;
-  const speed = CRUISES[i] + (rand() - 0.5) * 14;
+  const speed = (CRUISES[i] ?? 60) + (rand() - 0.5) * 14;
   return {
     id: `DRONE-00${i + 1}`,
-    model: MODELS[i],
+    model: MODELS[i] ?? "QUAD-4X",
     x,
     y,
     tx,
     ty,
     heading: (Math.atan2(ty - y, tx - x) * 180) / Math.PI,
     speed,
-    cruise: CRUISES[i],
+    cruise: CRUISES[i] ?? 60,
     altitude: 70 + rand() * 340,
     battery: 58 + rand() * 40,
     signal: 70 + rand() * 28,

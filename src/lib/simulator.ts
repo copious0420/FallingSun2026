@@ -127,6 +127,9 @@ function makeDrone(i: number): Drone {
   const tx = 5 + rand() * 90;
   const ty = 5 + rand() * 90;
   const speed = (CRUISES[i] ?? 60) + (rand() - 0.5) * 14;
+  const alt0 = 70 + rand() * 340;
+  let altWalk = alt0;
+  let spdWalk = Math.max(10, Math.round(speed + (rand() - 0.5) * 12));
   return {
     id: `DRONE-00${i + 1}`,
     model: MODELS[i] ?? "QUAD-4X",
@@ -137,17 +140,19 @@ function makeDrone(i: number): Drone {
     heading: (Math.atan2(ty - y, tx - x) * 180) / Math.PI,
     speed,
     cruise: CRUISES[i] ?? 60,
-    altitude: 70 + rand() * 340,
+    altitude: alt0,
     battery: 58 + rand() * 40,
     signal: 70 + rand() * 28,
     threat: threatFor(x, y, speed),
     flagged: null,
-    speedHistory: Array.from({ length: HISTORY_LEN }, () =>
-      Math.max(10, Math.round(speed + (rand() - 0.5) * 12)),
-    ),
-    altitudeHistory: Array.from({ length: HISTORY_LEN }, () =>
-      Math.round(70 + rand() * 340),
-    ),
+    speedHistory: Array.from({ length: HISTORY_LEN }, () => {
+      spdWalk = Math.min(160, Math.max(10, spdWalk + (rand() - 0.5) * 14));
+      return Math.round(spdWalk);
+    }),
+    altitudeHistory: Array.from({ length: HISTORY_LEN }, () => {
+      altWalk = Math.min(540, Math.max(50, altWalk + (rand() - 0.5) * 26));
+      return Math.round(altWalk);
+    }),
     waypointTicks: 8 + Math.floor(rand() * 18),
   };
 }

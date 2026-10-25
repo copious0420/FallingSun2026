@@ -1,24 +1,91 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Activity, FileText } from "lucide-react";
+import { TopBar } from "@/components/TopBar";
+import { RadarMap } from "@/components/RadarMap";
+import { DroneList } from "@/components/DroneList";
+import { AlertsFeed } from "@/components/AlertsFeed";
+import { Panel } from "@/components/Panel";
+import { useSimulator } from "@/hooks/useSimulator";
+import { effectiveThreat } from "@/lib/simulator";
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
 export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "SkyWatch — Live Operations Dashboard" },
+      { name: "description", content: "Real-time counter-drone airspace picture: live tracks, threat levels and active alerts." },
+    ],
+  }),
   component: Index,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
 function Index() {
+  const { alerts, drones } = useSimulator();
+  const highRisk = drones.filter((d) => {
+    const t = effectiveThreat(d);
+    return t === "HIGH" || t === "CRITICAL";
+  }).length;
+
   return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
+    <div className="min-h-screen bg-background">
+      <TopBar />
+
+      <main className="mx-auto grid max-w-[1800px] gap-3 p-3 lg:grid-cols-[300px_minmax(0,1fr)_340px]">
+        {/* left — live tracks */}
+        <Panel
+          title={`Track Objects // ${drones.length}`}
+          className="order-2 lg:order-1"
+          bodyClassName="p-2"
+        >
+          <DroneList />
+        </Panel>
+
+        {/* center — radar */}
+        <div className="order-1 space-y-3 lg:order-2">
+          <div className="relative">
+            <RadarMap />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] tracking-widest text-muted-foreground uppercase">
+              <span>Airspace Sector 7 // Top-Down Composite</span>
+              <span className="flex items-center gap-3">
+                <span className="flex items-center gap-1"><i className="inline-block h-1.5 w-1.5 rounded-full bg-hud-green" /> LOW/MED</span>
+                <span className="flex items-center gap-1"><i className="inline-block h-1.5 w-1.5 rounded-full bg-hud-amber" /> MEDIUM</span>
+                <span className="flex items-center gap-1"><i className="inline-block h-1.5 w-1.5 rounded-full bg-hud-red" /> HIGH/CRITICAL</span>
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[10px] tracking-widest uppercase lg:hidden">
+            <Link to="/report" className="border border-border px-3 py-2 text-muted-foreground hover:border-primary/50 hover:text-primary">
+              <FileText className="mr-1 inline h-3.5 w-3.5" /> Intelligence Report
+            </Link>
+          </div>
+        </div>
+
+        {/* right — alerts */}
+        <Panel
+          title="Active Alerts"
+          right={
+            <span className="flex items-center gap-1.5 text-[10px] tracking-widest text-muted-foreground uppercase">
+              <Activity className="h-3.5 w-3.5 text-primary" />
+              {alerts.length} events
+            </span>
+          }
+          className="order-3"
+          bodyClassName="p-2"
+        >
+          <AlertsFeed />
+        </Panel>
+
+        {/* footer strip */}
+        <footer className="order-4 col-span-full flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3 text-[10px] tracking-widest text-muted-foreground uppercase">
+          <span>
+            {highRisk > 0
+              ? `${highRisk} track${highRisk > 1 ? "s" : ""} flagged HIGH or above — ROE brief on standby`
+              : "All tracks nominal — patrol corridors clear"}
+          </span>
+          <Link to="/report" className="hidden items-center gap-1.5 border border-border px-3 py-1.5 transition-colors hover:border-primary/50 hover:text-primary lg:inline-flex">
+            <FileText className="h-3.5 w-3.5" /> Intelligence Report
+          </Link>
+        </footer>
+      </main>
     </div>
   );
 }

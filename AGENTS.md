@@ -8,3 +8,9 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+## SkyWatch app
+
+- Drone movement is simulated in a module-level singleton store (src/lib/simulator.ts) that survives route navigation; it must never run on the server (interval starts only on first client subscribe), and its initial state uses a seeded PRNG so SSR and client hydration match.
+- Threat events from HIGH/CRITICAL escalations and operator actions are logged to the drone_alerts table from the browser client (anon insert+select policies, no auth in this app).
+- Removed unused src/components/ui/chart.tsx (shadcn chart template) — it only typechecks against Recharts v2 and the app uses Recharts v3 directly.

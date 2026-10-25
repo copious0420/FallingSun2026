@@ -30,6 +30,7 @@ export interface Drone {
   speedHistory: number[];
   altitudeHistory: number[];
   waypointTicks: number;
+  positionHistory: Array<{ x: number; y: number }>;
 }
 
 export interface Alert {
@@ -154,6 +155,7 @@ function makeDrone(i: number): Drone {
       return Math.round(altWalk);
     }),
     waypointTicks: 8 + Math.floor(rand() * 18),
+    positionHistory: [{ x, y }],
   };
 }
 
@@ -214,6 +216,8 @@ function tick() {
       d.y += (dy / travel) * step;
       d.waypointTicks -= 1;
     }
+    d.positionHistory.push({ x: d.x, y: d.y });
+    if (d.positionHistory.length > 10) d.positionHistory.shift();
     d.heading = (((Math.atan2(d.ty - d.y, d.tx - d.x) * 180) / Math.PI) + 360) % 360;
     d.speed = Math.min(165, Math.max(12, d.speed + (d.cruise - d.speed) * 0.06 + (Math.random() - 0.5) * 5));
     d.altitude = Math.min(560, Math.max(40, d.altitude + (Math.random() - 0.5) * 14));
@@ -348,6 +352,56 @@ export function etaText(eta: ZoneEta | null): string {
   const m = Math.floor(eta.seconds / 60);
   const s = eta.seconds % 60;
   return `Estimated to reach Zone ${eta.zone.name} in ${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+export interface TrajectoryPrediction {
+  droneId: string;
+  points: Array<{ x: number; y: number }>; // next 15 predicted positions
+  breachZone: Zone | null;
+  breachInSeconds: number | null;
+  inside?: boolean; // drone is already inside the restricted zone
+}
+
+export function predictTrajectory(d: Drone): TrajectoryPrediction {
+  const history = d.positionHistory;
+  const current = zoneAt(d.x, d.y);
+  if (current) {
+    return { droneId: d.id, points: [], breachZone: current, breachInSeconds: 0, inside: true };
+  }
+  if (history.length < 2) {
+    return { droneId: d.id, points: [], breachZone: null, breachInSeconds: null };
+  }
+
+  // average velocity vector from the most recent positions
+  const samples = history.slice(-5);
+  let vx = 0;
+  let vy = 0;
+  for (let i = 1; i < samples.length; i++) {
+    vx += samples[i]!.x - samples[i - 1]!.x;
+    vy += samples[i]!.y - samples[i - 1]!.y;
+  }
+  vx /= samples.length - 1;
+  vy /= samples.length - 1;
+
+  const points: Array<{ x: number; y: number }> = [];
+  let cx = d.x;
+  let cy = d.y;
+  for (let i = 0; i < 15; i++) {
+    cx += vx;
+    cy += vy;
+    points.push({ x: cx, y: cy });
+  }
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]!;
+    for (const z of RESTRICTED) {
+      if (dist(p.x, p.y, z.cx, z.cy) <= z.r) {
+        return { droneId: d.id, points, breachZone: z, breachInSeconds: (i + 1) * (TICK_MS / 1000) };
+      }
+    }
+  }
+
+  return { droneId: d.id, points, breachZone: null, breachInSeconds: null };
 }
 
 export function gridRef(x: number, y: number): string {

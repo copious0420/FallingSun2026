@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Activity, FileText } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
@@ -6,7 +7,8 @@ import { DroneList } from "@/components/DroneList";
 import { AlertsFeed } from "@/components/AlertsFeed";
 import { Panel } from "@/components/Panel";
 import { useSimulator } from "@/hooks/useSimulator";
-import { effectiveThreat } from "@/lib/simulator";
+import { TrajectoryAlertModal } from "@/components/TrajectoryAlertModal";
+import { effectiveThreat, predictTrajectory, type TrajectoryPrediction } from "@/lib/simulator";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -19,7 +21,22 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
-  const { alerts, drones } = useSimulator();
+  const { alerts, drones, version } = useSimulator();
+  const [activeBreachAlert, setActiveBreachAlert] = useState<TrajectoryPrediction | null>(null);
+  const acknowledgedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (activeBreachAlert) return;
+    const breaches = drones
+      .map(predictTrajectory)
+      .filter((p) => p.breachZone !== null && !acknowledgedRef.current.has(p.droneId + "-" + p.breachZone?.id));
+    if (breaches.length > 0) {
+      breaches.sort((a, b) => (a.breachInSeconds ?? 999) - (b.breachInSeconds ?? 999));
+      setActiveBreachAlert(breaches[0]!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
+
   const highRisk = drones.filter((d) => {
     const t = effectiveThreat(d);
     return t === "HIGH" || t === "CRITICAL";
@@ -86,6 +103,16 @@ function Index() {
           </Link>
         </footer>
       </main>
+
+      <TrajectoryAlertModal
+        prediction={activeBreachAlert}
+        onAcknowledge={() => {
+          if (activeBreachAlert?.breachZone) {
+            acknowledgedRef.current.add(activeBreachAlert.droneId + "-" + activeBreachAlert.breachZone.id);
+          }
+          setActiveBreachAlert(null);
+        }}
+      />
     </div>
   );
 }

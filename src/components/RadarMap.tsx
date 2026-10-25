@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { useNavigate } from "@tanstack/react-router";
 import { useSimulator } from "@/hooks/useSimulator";
-import { MAP_SIZE, ZONES, effectiveThreat } from "@/lib/simulator";
+import { MAP_SIZE, ZONES, effectiveThreat, predictTrajectory } from "@/lib/simulator";
 import { threatColor } from "@/components/ThreatBadge";
 
 const GRID = 10;
@@ -9,6 +9,7 @@ const GRID = 10;
 export function RadarMap() {
   const { drones } = useSimulator();
   const navigate = useNavigate();
+  const predictions = drones.map(predictTrajectory);
 
   return (
     <div className="relative mx-auto aspect-square w-full max-w-[860px] overflow-hidden border border-border bg-[#050505]">
@@ -92,6 +93,23 @@ export function RadarMap() {
             </text>
           </g>
         ))}
+
+        {/* predicted breach trajectories */}
+        {predictions.map((pred) => {
+          if (!pred.breachZone || pred.points.length === 0) return null;
+          const pathD = pred.points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+          return (
+            <path
+              key={pred.droneId + "-traj"}
+              d={pathD}
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth={0.3}
+              strokeDasharray="1 1"
+              opacity={0.8}
+            />
+          );
+        })}
 
         {/* drone blips */}
         {drones.map((d) => {

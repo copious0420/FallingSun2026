@@ -43,6 +43,12 @@ export function TrajectoryAlertModal({ prediction, onAcknowledge }: Props) {
 
         <div className="mb-6 text-xs tracking-widest text-red-400">— INTERCEPT RECOMMENDED —</div>
 
+        {prediction.breachProbability !== null && (
+          <div className="text-amber-400 text-xs tracking-widest mb-4">
+            BREACH PROBABILITY: <span className="font-bold text-lg">{prediction.breachProbability}%</span>
+          </div>
+        )}
+
         <div className="mb-6 text-xs text-gray-400">
           Trajectory analysis based on last 10-second movement pattern. Predicted path extrapolated using velocity
           vector algorithm.

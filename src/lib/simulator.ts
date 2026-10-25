@@ -54,10 +54,10 @@ export const TICK_MS = 1000;
 export const HISTORY_LEN = 60;
 
 export const ZONES: Zone[] = [
-  { id: "alpha", name: "ALPHA", cx: 30, cy: 34, r: 14, restricted: true },
-  { id: "bravo", name: "BRAVO", cx: 72, cy: 28, r: 12, restricted: true },
-  { id: "charlie", name: "CHARLIE", cx: 62, cy: 72, r: 10, restricted: true },
-  { id: "delta", name: "DELTA", cx: 22, cy: 76, r: 15, restricted: false },
+  { id: "alpha", name: "ALPHA", cx: 30, cy: 34, r: 8, restricted: true },
+  { id: "bravo", name: "BRAVO", cx: 72, cy: 28, r: 7, restricted: true },
+  { id: "charlie", name: "CHARLIE", cx: 62, cy: 72, r: 6, restricted: true },
+  { id: "delta", name: "DELTA", cx: 22, cy: 76, r: 9, restricted: false },
 ];
 
 const RESTRICTED = ZONES.filter((z) => z.restricted);
@@ -116,6 +116,7 @@ function threatFor(x: number, y: number, speed: number): ThreatLevel {
 
 /* ---------- store ---------- */
 const drones: Drone[] = [];
+const zoneCooldowns = new Map<string, number>(); // key: droneId+zoneId, value: timestamp when cooldown expires
 const alerts: Alert[] = [];
 let listeners = new Set<() => void>();
 let intervalId: ReturnType<typeof setInterval> | null = null;
@@ -159,7 +160,29 @@ function makeDrone(i: number): Drone {
   };
 }
 
-for (let i = 0; i < 9; i++) drones.push(makeDrone(i));
+for (let i = 0; i < 3; i++) drones.push(makeDrone(i));
+
+// Manual drone — controlled by arrow keys
+drones.push({
+  id: "MANUAL-01",
+  model: "OPERATOR-CTRL",
+  x: 50,
+  y: 85,
+  tx: 50,
+  ty: 85,
+  heading: 0,
+  speed: 28,
+  cruise: 28,
+  altitude: 120,
+  battery: 100,
+  signal: 99,
+  threat: "LOW",
+  flagged: null,
+  speedHistory: Array(60).fill(28),
+  altitudeHistory: Array(60).fill(120),
+  positionHistory: Array(8).fill({ x: 50, y: 85 }),
+  waypointTicks: 999,
+});
 
 let alertSeq = 0;
 function makeAlert(
@@ -203,18 +226,42 @@ function pushAlert(alert: Alert, persist: boolean) {
 
 function tick() {
   for (const d of drones) {
+    if (d.id === "MANUAL-01") continue; // moved only by operator input
     const dx = d.tx - d.x;
     const dy = d.ty - d.y;
     const travel = Math.hypot(dx, dy);
-    if (travel < 1.5 || d.waypointTicks <= 0) {
-      d.tx = 5 + Math.random() * 90;
-      d.ty = 5 + Math.random() * 90;
+    const prevX = d.x;
+    const prevY = d.y;
+
+    // Check if current target zone is on cooldown
+    const targetZone = RESTRICTED.find((z) => Math.hypot(d.tx - z.cx, d.ty - z.cy) <= z.r + 2);
+    const onCooldown = !!targetZone && (zoneCooldowns.get(d.id + targetZone.id) ?? 0) > Date.now();
+
+    if (travel < 1.5 || d.waypointTicks <= 0 || onCooldown) {
+      // Pick new waypoint — bias toward restricted zones but respect cooldowns
+      const availableZones = RESTRICTED.filter((z) => (zoneCooldowns.get(d.id + z.id) ?? 0) <= Date.now());
+      if (availableZones.length > 0 && Math.random() > 0.3) {
+        const z = availableZones[Math.floor(Math.random() * availableZones.length)]!;
+        const angle = Math.random() * Math.PI * 2;
+        d.tx = z.cx + Math.cos(angle) * z.r * 0.5;
+        d.ty = z.cy + Math.sin(angle) * z.r * 0.5;
+      } else {
+        d.tx = 5 + Math.random() * 90;
+        d.ty = 5 + Math.random() * 90;
+      }
       d.waypointTicks = 12 + Math.floor(Math.random() * 20);
     } else {
       const step = Math.min(travel, d.speed / 120);
       d.x += (dx / travel) * step;
       d.y += (dy / travel) * step;
       d.waypointTicks -= 1;
+    }
+
+    // When a drone exits a restricted zone, set a 15s cooldown for that zone
+    for (const z of RESTRICTED) {
+      if (dist(prevX, prevY, z.cx, z.cy) <= z.r && dist(d.x, d.y, z.cx, z.cy) > z.r) {
+        zoneCooldowns.set(d.id + z.id, Date.now() + 15000);
+      }
     }
     d.positionHistory.push({ x: d.x, y: d.y });
     if (d.positionHistory.length > 10) d.positionHistory.shift();
@@ -359,6 +406,7 @@ export interface TrajectoryPrediction {
   points: Array<{ x: number; y: number }>; // next 15 predicted positions
   breachZone: Zone | null;
   breachInSeconds: number | null;
+  breachProbability: number | null; // 0-100 when a breach is predicted, else null
   inside?: boolean; // drone is already inside the restricted zone
 }
 
@@ -366,27 +414,33 @@ export function predictTrajectory(d: Drone): TrajectoryPrediction {
   const history = d.positionHistory;
   const current = zoneAt(d.x, d.y);
   if (current) {
-    return { droneId: d.id, points: [], breachZone: current, breachInSeconds: 0, inside: true };
+    return { droneId: d.id, points: [], breachZone: current, breachInSeconds: 0, breachProbability: 100, inside: true };
   }
-  if (history.length < 2) {
-    return { droneId: d.id, points: [], breachZone: null, breachInSeconds: null };
+  if (history.length < 3) {
+    return { droneId: d.id, points: [], breachZone: null, breachInSeconds: null, breachProbability: null };
   }
 
-  // average velocity vector from the most recent positions
-  const samples = history.slice(-5);
+  // Smoothed velocity vector — weighted average of the last 8 steps, recent steps weighted more.
+  const samples = history.slice(-8);
   let vx = 0;
   let vy = 0;
+  let weightSum = 0;
   for (let i = 1; i < samples.length; i++) {
-    vx += samples[i]!.x - samples[i - 1]!.x;
-    vy += samples[i]!.y - samples[i - 1]!.y;
+    const w = i; // more recent deltas get a larger weight
+    vx += (samples[i]!.x - samples[i - 1]!.x) * w;
+    vy += (samples[i]!.y - samples[i - 1]!.y) * w;
+    weightSum += w;
   }
-  vx /= samples.length - 1;
-  vy /= samples.length - 1;
+  if (weightSum > 0) {
+    vx /= weightSum;
+    vy /= weightSum;
+  }
 
+  // Project 40 steps forward.
   const points: Array<{ x: number; y: number }> = [];
   let cx = d.x;
   let cy = d.y;
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 40; i++) {
     cx += vx;
     cy += vy;
     points.push({ x: cx, y: cy });
@@ -396,12 +450,55 @@ export function predictTrajectory(d: Drone): TrajectoryPrediction {
     const p = points[i]!;
     for (const z of RESTRICTED) {
       if (dist(p.x, p.y, z.cx, z.cy) <= z.r) {
-        return { droneId: d.id, points, breachZone: z, breachInSeconds: (i + 1) * (TICK_MS / 1000) };
+        // Breach probability from how directly the drone heads at the zone centre.
+        const toCx = z.cx - d.x;
+        const toCy = z.cy - d.y;
+        const vMag = Math.hypot(vx, vy);
+        const toMag = Math.hypot(toCx, toCy);
+        let probability = 0;
+        if (vMag > 0 && toMag > 0) {
+          const dot = (vx * toCx + vy * toCy) / (vMag * toMag); // cosine of heading error, -1..1
+          probability = Math.round(Math.max(0, Math.min(1, dot)) * 100);
+        }
+        return {
+          droneId: d.id,
+          points,
+          breachZone: z,
+          breachInSeconds: (i + 1) * (TICK_MS / 1000),
+          breachProbability: probability,
+        };
       }
     }
   }
 
-  return { droneId: d.id, points, breachZone: null, breachInSeconds: null };
+  return { droneId: d.id, points, breachZone: null, breachInSeconds: null, breachProbability: null };
+}
+
+export function moveManualDrone(dx: number, dy: number) {
+  const d = drones.find((x) => x.id === "MANUAL-01");
+  if (!d) return;
+  const step = 0.06; // ~3.6 units/sec at 60fps
+  d.x = Math.max(1, Math.min(99, d.x + dx * step));
+  d.y = Math.max(1, Math.min(99, d.y + dy * step));
+  d.tx = d.x;
+  d.ty = d.y;
+  if (dx !== 0 || dy !== 0) {
+    d.heading = (((Math.atan2(dy, dx) * 180) / Math.PI) + 360) % 360;
+  }
+  d.positionHistory.push({ x: d.x, y: d.y });
+  if (d.positionHistory.length > 8) d.positionHistory.shift();
+  const prev = d.threat;
+  const next = threatFor(d.x, d.y, d.speed);
+  d.threat = next;
+  if (THREAT_RANK[next] > THREAT_RANK[prev] && THREAT_RANK[next] >= 2) {
+    const z = zoneAt(d.x, d.y);
+    const message = z
+      ? `${d.id} BREACH — entered restricted Zone ${z.name} at ${Math.round(d.speed)} km/h`
+      : `${d.id} track escalation — monitoring`;
+    pushAlert(makeAlert(next, d.id, message, { x: d.x, y: d.y }), true);
+  }
+  version += 1;
+  publish();
 }
 
 export function gridRef(x: number, y: number): string {

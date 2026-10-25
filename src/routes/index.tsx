@@ -23,13 +23,18 @@ export const Route = createFileRoute("/")({
 function Index() {
   const { alerts, drones, version } = useSimulator();
   const [activeBreachAlert, setActiveBreachAlert] = useState<TrajectoryPrediction | null>(null);
-  const acknowledgedRef = useRef<Set<string>>(new Set());
+  const breachCooldowns = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (activeBreachAlert) return;
+    const now = Date.now();
     const breaches = drones
       .map(predictTrajectory)
-      .filter((p) => p.breachZone !== null && !acknowledgedRef.current.has(p.droneId + "-" + p.breachZone?.id));
+      .filter((p) => {
+        if (!p.breachZone) return false;
+        const key = p.droneId + "-" + p.breachZone.id;
+        return (breachCooldowns.current.get(key) ?? 0) <= now;
+      });
     if (breaches.length > 0) {
       breaches.sort((a, b) => (a.breachInSeconds ?? 999) - (b.breachInSeconds ?? 999));
       setActiveBreachAlert(breaches[0]!);
@@ -108,7 +113,8 @@ function Index() {
         prediction={activeBreachAlert}
         onAcknowledge={() => {
           if (activeBreachAlert?.breachZone) {
-            acknowledgedRef.current.add(activeBreachAlert.droneId + "-" + activeBreachAlert.breachZone.id);
+            const key = activeBreachAlert.droneId + "-" + activeBreachAlert.breachZone.id;
+            breachCooldowns.current.set(key, Date.now() + 15000);
           }
           setActiveBreachAlert(null);
         }}

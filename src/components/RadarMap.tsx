@@ -1,7 +1,8 @@
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "@tanstack/react-router";
 import { useSimulator } from "@/hooks/useSimulator";
-import { MAP_SIZE, ZONES, effectiveThreat, predictTrajectory } from "@/lib/simulator";
+import { MAP_SIZE, ZONES, effectiveThreat, predictTrajectory, moveManualDrone } from "@/lib/simulator";
 import { threatColor } from "@/components/ThreatBadge";
 
 const GRID = 10;
@@ -10,6 +11,42 @@ export function RadarMap() {
   const { drones } = useSimulator();
   const navigate = useNavigate();
   const predictions = drones.map(predictTrajectory);
+
+  useEffect(() => {
+    const STEP = 1;
+    const keys = new Set<string>();
+    let rafId: number;
+
+    function loop() {
+      let dx = 0, dy = 0;
+      if (keys.has("ArrowUp"))    dy -= STEP;
+      if (keys.has("ArrowDown"))  dy += STEP;
+      if (keys.has("ArrowLeft"))  dx -= STEP;
+      if (keys.has("ArrowRight")) dx += STEP;
+      if (dx !== 0 || dy !== 0) moveManualDrone(dx, dy);
+      rafId = requestAnimationFrame(loop);
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+        e.preventDefault();
+        keys.add(e.key);
+      }
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      keys.delete(e.key);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    rafId = requestAnimationFrame(loop);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      cancelAnimationFrame(rafId);
+    };
+  }, []);
 
   return (
     <div className="relative mx-auto aspect-square w-full max-w-[860px] overflow-hidden border border-border bg-[#050505]">
@@ -27,6 +64,19 @@ export function RadarMap() {
 
       {/* grid + zones */}
       <svg viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`} className="absolute inset-0 h-full w-full" aria-label="Tactical airspace map">
+        <defs>
+          <marker
+            id="traj-arrow"
+            markerWidth={4}
+            markerHeight={4}
+            refX={2}
+            refY={2}
+            orient="auto"
+            markerUnits="userSpaceOnUse"
+          >
+            <path d="M0,0 L4,2 L0,4 Z" fill="#ff6b00" />
+          </marker>
+        </defs>
         {/* grid */}
         {Array.from({ length: GRID + 1 }, (_, i) => {
           const p = (i * MAP_SIZE) / GRID;
@@ -103,10 +153,11 @@ export function RadarMap() {
               key={pred.droneId + "-traj"}
               d={pathD}
               fill="none"
-              stroke="#f59e0b"
-              strokeWidth={0.3}
-              strokeDasharray="1 1"
+              stroke="#ff6b00"
+              strokeWidth={0.5}
+              strokeDasharray="2 1"
               opacity={0.8}
+              markerEnd="url(#traj-arrow)"
             />
           );
         })}
@@ -116,14 +167,15 @@ export function RadarMap() {
           const level = effectiveThreat(d);
           const color = threatColor(level);
           const critical = level === "CRITICAL";
+          const isManual = d.id === "MANUAL-01";
           return (
             <motion.g
               key={d.id}
               initial={false}
               animate={{ x: d.x, y: d.y }}
-              transition={{ duration: 0.95, ease: "linear" }}
+              transition={{ duration: isManual ? 0 : 0.95, ease: "linear" }}
               className="cursor-pointer"
-              onClick={() => navigate({ to: "/drones/$id", params: { id: d.id } })}
+              onClick={() => !isManual && navigate({ to: "/drones/$id", params: { id: d.id } })}
               role="button"
               aria-label={`Open ${d.id} detail`}
             >
@@ -138,11 +190,23 @@ export function RadarMap() {
                   transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }}
                 />
               )}
-              <circle r={2.1} fill="none" stroke={color} strokeWidth={0.32} strokeOpacity={0.9} />
-              <circle r={0.85} fill={color} />
-              <text y={-3.1} textAnchor="middle" fontSize={2.3} fill={color} letterSpacing={0.2}>
-                {d.id.replace("DRONE-", "D-")}
-              </text>
+              {isManual ? (
+                <>
+                  <rect x={-2.2} y={-2.2} width={4.4} height={4.4} fill="none" stroke="#00ffff" strokeWidth={0.4} strokeOpacity={0.9} />
+                  <circle r={0.85} fill="#00ffff" />
+                  <text y={-3.4} textAnchor="middle" fontSize={2.3} fill="#00ffff" letterSpacing={0.2}>
+                    MANUAL-01
+                  </text>
+                </>
+              ) : (
+                <>
+                  <circle r={2.1} fill="none" stroke={color} strokeWidth={0.32} strokeOpacity={0.9} />
+                  <circle r={0.85} fill={color} />
+                  <text y={-3.1} textAnchor="middle" fontSize={2.3} fill={color} letterSpacing={0.2}>
+                    {d.id.replace("DRONE-", "D-")}
+                  </text>
+                </>
+              )}
             </motion.g>
           );
         })}
@@ -152,8 +216,9 @@ export function RadarMap() {
       <div className="pointer-events-none absolute top-2 left-2 text-[9px] tracking-widest text-muted-foreground uppercase">
         Grid 100×100 // 0.5 KM/DIV
       </div>
-      <div className="pointer-events-none absolute right-2 bottom-2 text-[9px] tracking-widest text-muted-foreground uppercase">
-        Click track for full profile
+      <div className="pointer-events-none absolute right-2 bottom-2 text-[9px] tracking-widest text-muted-foreground uppercase text-right">
+        <div>Click track for full profile</div>
+        <div className="text-cyan-400/60 mt-0.5">↑↓←→ Control MANUAL-01</div>
       </div>
     </div>
   );

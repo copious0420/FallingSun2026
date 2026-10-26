@@ -34,6 +34,7 @@ import {
   HISTORY_LEN,
   nextZoneEta,
   etaText,
+  predictTrajectory,
   zoneAt,
 } from "@/lib/simulator";
 import { ZONES } from "@/lib/simulator";
@@ -68,6 +69,7 @@ function DroneDetail() {
   const level = effectiveThreat(drone);
   const color = threatColor(level);
   const eta = nextZoneEta(drone);
+  const prediction = predictTrajectory(drone);
   const inZone = zoneAt(drone.x, drone.y);
   const chartData = drone.speedHistory.map((speed, i) => ({
     t: i - (HISTORY_LEN - 1),
@@ -175,6 +177,32 @@ function DroneDetail() {
                   <div>{z.restricted ? "RESTRICTED" : "PATROL"}</div>
                 </div>
               ))}
+            </div>
+
+            <div className="mt-4" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+              <div className="text-[10px] tracking-widest text-muted-foreground mb-2">TRAJECTORY ANALYSIS</div>
+
+              <div className="flex justify-between mb-1">
+                <span className="text-xs text-red-400">BREACH PROBABILITY</span>
+                <span className="text-xs font-bold text-red-400">{prediction.breachProbability}%</span>
+              </div>
+              <div className="w-full bg-gray-800 h-1 mb-3">
+                <div className="bg-red-500 h-1 transition-all duration-500" style={{ width: `${prediction.breachProbability}%` }} />
+              </div>
+
+              <div className="flex justify-between mb-1">
+                <span className="text-xs text-green-400">SAFE CORRIDOR</span>
+                <span className="text-xs font-bold text-green-400">{prediction.safeProbability}%</span>
+              </div>
+              <div className="w-full bg-gray-800 h-1">
+                <div className="bg-green-500 h-1 transition-all duration-500" style={{ width: `${prediction.safeProbability}%` }} />
+              </div>
+
+              {prediction.breachZone && (
+                <div className="mt-3 text-[10px] text-amber-400 tracking-widest">
+                  PREDICTED ZONE: {prediction.breachZone.name} — ETA {prediction.breachInSeconds}s
+                </div>
+              )}
             </div>
           </Panel>
 

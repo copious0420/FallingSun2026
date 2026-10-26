@@ -144,6 +144,39 @@ export function RadarMap() {
           </g>
         ))}
 
+        {/* historical paths — where each track came from */}
+        {predictions.map((pred) => {
+          if (pred.historicalPoints.length < 2) return null;
+          const pathD = pred.historicalPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+          return (
+            <path
+              key={pred.droneId + "-hist"}
+              d={pathD}
+              fill="none"
+              stroke="#ffffff"
+              strokeWidth={0.2}
+              opacity={0.15}
+            />
+          );
+        })}
+
+        {/* drift predicted paths — curved projection of where each track might go */}
+        {predictions.map((pred) => {
+          if (pred.breachProbability <= 20 || pred.driftPoints.length === 0) return null;
+          const pathD = pred.driftPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+          return (
+            <path
+              key={pred.droneId + "-drift"}
+              d={pathD}
+              fill="none"
+              stroke="#00ffff"
+              strokeWidth={0.25}
+              strokeDasharray="1.5 1.5"
+              opacity={0.25}
+            />
+          );
+        })}
+
         {/* predicted breach trajectories */}
         {predictions.map((pred) => {
           if (!pred.breachZone || pred.points.length === 0) return null;

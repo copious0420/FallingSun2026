@@ -403,21 +403,44 @@ export function etaText(eta: ZoneEta | null): string {
 
 export interface TrajectoryPrediction {
   droneId: string;
-  points: Array<{ x: number; y: number }>; // next 15 predicted positions
+  points: Array<{ x: number; y: number }>; // straight-line projection used for the breach test
+  driftPoints: Array<{ x: number; y: number }>; // curved projection if the drone keeps its current turn rate
+  historicalPoints: Array<{ x: number; y: number }>; // last actual positions (the path it came from)
   breachZone: Zone | null;
   breachInSeconds: number | null;
-  breachProbability: number | null; // 0-100 when a breach is predicted, else null
+  breachProbability: number; // 0-100, dynamic — recalculated every tick
+  safeProbability: number; // 100 - breachProbability
   inside?: boolean; // drone is already inside the restricted zone
 }
 
 export function predictTrajectory(d: Drone): TrajectoryPrediction {
   const history = d.positionHistory;
+  const historicalPoints = history.slice();
   const current = zoneAt(d.x, d.y);
   if (current) {
-    return { droneId: d.id, points: [], breachZone: current, breachInSeconds: 0, breachProbability: 100, inside: true };
+    return {
+      droneId: d.id,
+      points: [],
+      driftPoints: [],
+      historicalPoints,
+      breachZone: current,
+      breachInSeconds: 0,
+      breachProbability: 100,
+      safeProbability: 0,
+      inside: true,
+    };
   }
   if (history.length < 3) {
-    return { droneId: d.id, points: [], breachZone: null, breachInSeconds: null, breachProbability: null };
+    return {
+      droneId: d.id,
+      points: [],
+      driftPoints: [],
+      historicalPoints,
+      breachZone: null,
+      breachInSeconds: null,
+      breachProbability: 0,
+      safeProbability: 100,
+    };
   }
 
   // Smoothed velocity vector — weighted average of the last 8 steps, recent steps weighted more.
@@ -445,7 +468,82 @@ export function predictTrajectory(d: Drone): TrajectoryPrediction {
     vy *= scale;
   }
 
-  // Project 40 steps forward.
+  // Nearest restricted zone — the reference for every probability factor below.
+  let nearest: Zone | null = null;
+  let nearestDist = Infinity;
+  for (const z of RESTRICTED) {
+    const dd = dist(d.x, d.y, z.cx, z.cy);
+    if (dd < nearestDist) {
+      nearestDist = dd;
+      nearest = z;
+    }
+  }
+
+  // Alignment of a vector toward the nearest zone centre, normalised to 0..1 (1 = aimed straight at it).
+  const alignTo = (ax: number, ay: number): number => {
+    if (!nearest) return 0;
+    const toX = nearest.cx - d.x;
+    const toY = nearest.cy - d.y;
+    const aMag = Math.hypot(ax, ay);
+    const toMag = Math.hypot(toX, toY);
+    if (aMag === 0 || toMag === 0) return 0;
+    const cos = (ax * toX + ay * toY) / (aMag * toMag); // -1..1
+    return Math.max(0, Math.min(1, cos));
+  };
+
+  // Raw early vs recent step vectors (unscaled — magnitude cancels in the ratios below).
+  const earlyVx = samples[1]!.x - samples[0]!.x;
+  const earlyVy = samples[1]!.y - samples[0]!.y;
+  const lastVx = samples[samples.length - 1]!.x - samples[samples.length - 2]!.x;
+  const lastVy = samples[samples.length - 1]!.y - samples[samples.length - 2]!.y;
+
+  // Factor A (50%) — is the current heading aimed at the zone?
+  const factorA = alignTo(vx, vy) * 100;
+
+  // Factor B (30%) — has the drone been curving toward the zone over the window?
+  const earlyAlign = alignTo(earlyVx, earlyVy);
+  const recentAlign = alignTo(lastVx, lastVy);
+  const drift = recentAlign - earlyAlign; // >0 = turning toward the zone
+  const factorB = Math.max(0, Math.min(1, recentAlign * 0.5 + ((drift + 1) / 2) * 0.5)) * 100;
+
+  // Factor C (20%) — proximity to the zone boundary; nothing beyond 3x the radius.
+  const boundaryDist = nearest ? nearestDist - nearest.r : Infinity;
+  const maxDist = nearest ? nearest.r * 3 : 1;
+  let factorC = 0;
+  if (boundaryDist <= 0) factorC = 100;
+  else if (boundaryDist < maxDist) factorC = (1 - boundaryDist / maxDist) * 100;
+
+  const weighted = factorA * 0.5 + factorB * 0.3 + factorC * 0.2;
+  const breachProbability = Math.round(Math.max(0, Math.min(100, weighted)));
+  const safeProbability = 100 - breachProbability;
+
+  // Curved ("drift") projection — rotate the velocity vector by the observed turn rate each step.
+  const earlyAng = Math.atan2(earlyVy, earlyVx);
+  const lastAng = Math.atan2(lastVy, lastVx);
+  let dAng = lastAng - earlyAng;
+  while (dAng > Math.PI) dAng -= 2 * Math.PI;
+  while (dAng < -Math.PI) dAng += 2 * Math.PI;
+  const turnSteps = samples.length - 1;
+  const angVel = turnSteps > 0 ? dAng / turnSteps : 0;
+
+  const driftPoints: Array<{ x: number; y: number }> = [];
+  let dvx = vx;
+  let dvy = vy;
+  let dcx = d.x;
+  let dcy = d.y;
+  const cosA = Math.cos(angVel);
+  const sinA = Math.sin(angVel);
+  for (let i = 0; i < 30; i++) {
+    const nvx = dvx * cosA - dvy * sinA;
+    const nvy = dvx * sinA + dvy * cosA;
+    dvx = nvx;
+    dvy = nvy;
+    dcx += dvx;
+    dcy += dvy;
+    driftPoints.push({ x: dcx, y: dcy });
+  }
+
+  // Straight-line projection used for the amber breach line and the breach modal.
   const points: Array<{ x: number; y: number }> = [];
   let cx = d.x;
   let cy = d.y;
@@ -455,32 +553,29 @@ export function predictTrajectory(d: Drone): TrajectoryPrediction {
     points.push({ x: cx, y: cy });
   }
 
-  for (let i = 0; i < points.length; i++) {
+  let breachZone: Zone | null = null;
+  let breachInSeconds: number | null = null;
+  for (let i = 0; i < points.length && !breachZone; i++) {
     const p = points[i]!;
     for (const z of RESTRICTED) {
       if (dist(p.x, p.y, z.cx, z.cy) <= z.r) {
-        // Breach probability from how directly the drone heads at the zone centre.
-        const toCx = z.cx - d.x;
-        const toCy = z.cy - d.y;
-        const vMag = Math.hypot(vx, vy);
-        const toMag = Math.hypot(toCx, toCy);
-        let probability = 0;
-        if (vMag > 0 && toMag > 0) {
-          const dot = (vx * toCx + vy * toCy) / (vMag * toMag); // cosine of heading error, -1..1
-          probability = Math.round(Math.max(0, Math.min(1, dot)) * 100);
-        }
-        return {
-          droneId: d.id,
-          points,
-          breachZone: z,
-          breachInSeconds: isManual ? Math.round((i + 1) / 8) : (i + 1) * (TICK_MS / 1000),
-          breachProbability: probability,
-        };
+        breachZone = z;
+        breachInSeconds = isManual ? Math.round((i + 1) / 8) : (i + 1) * (TICK_MS / 1000);
+        break;
       }
     }
   }
 
-  return { droneId: d.id, points, breachZone: null, breachInSeconds: null, breachProbability: null };
+  return {
+    droneId: d.id,
+    points,
+    driftPoints,
+    historicalPoints,
+    breachZone,
+    breachInSeconds,
+    breachProbability,
+    safeProbability,
+  };
 }
 
 export function moveManualDrone(dx: number, dy: number) {

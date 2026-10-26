@@ -1,3 +1,4 @@
+import { lazy, Suspense, useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
@@ -30,7 +31,9 @@ import {
   effectiveThreat,
   flagDrone,
   fmtHeading,
+  getAllZones,
   gridRef,
+  haversineMeters,
   HISTORY_LEN,
   nextZoneEta,
   etaText,
@@ -38,6 +41,9 @@ import {
   zoneAt,
 } from "@/lib/simulator";
 import { ZONES } from "@/lib/simulator";
+
+// Leaflet touches `window` as soon as it is imported, so the mini map is loaded in the browser only.
+const DroneMiniMap = lazy(() => import("@/components/DroneMiniMap").then((m) => ({ default: m.DroneMiniMap })));
 
 export const Route = createFileRoute("/drones/$id")({
   head: () => ({
@@ -54,6 +60,8 @@ function DroneDetail() {
   const { drones } = useSimulator();
   const navigate = useNavigate();
   const drone = drones.find((d) => d.id === id);
+  const [mapReady, setMapReady] = useState(false);
+  useEffect(() => setMapReady(true), []);
 
   if (!drone) {
     return (
@@ -70,16 +78,18 @@ function DroneDetail() {
   const color = threatColor(level);
   const eta = nextZoneEta(drone);
   const prediction = predictTrajectory(drone);
-  const inZone = zoneAt(drone.x, drone.y);
+  const inZone = zoneAt(drone.lat, drone.lng);
   const chartData = drone.speedHistory.map((speed, i) => ({
     t: i - (HISTORY_LEN - 1),
     speed,
     altitude: drone.altitudeHistory[i],
   }));
+  const nearbyZones = getAllZones().filter((z) => haversineMeters(drone.lat, drone.lng, z.lat, z.lng) < 5000);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur">
+    // Desktop: fixed to the viewport, no page scroll. Mobile stacks and scrolls.
+    <div className="flex min-h-screen flex-col bg-background lg:h-screen lg:overflow-hidden">
+      <header className="sticky top-0 z-20 shrink-0 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur">
         <div className="mx-auto flex max-w-[1400px] items-center gap-4">
           <button
             onClick={() => navigate({ to: "/" })}
@@ -87,22 +97,69 @@ function DroneDetail() {
           >
             <ArrowLeft className="h-3.5 w-3.5" /> Ops Floor
           </button>
-          <h1 className="text-lg font-bold tracking-[0.3em] text-foreground">{drone.id}</h1>
+          <h1 className="font-mono text-lg font-bold tracking-[0.3em] text-foreground">{drone.id}</h1>
           <ThreatBadge level={level} />
           {drone.flagged && (
             <span className="border border-primary/50 px-2 py-0.5 text-[10px] tracking-widest text-primary uppercase">
               Operator: {drone.flagged}
             </span>
           )}
-          <span suppressHydrationWarning className="ml-auto hidden text-[11px] tabular-nums text-muted-foreground sm:block">
-            {gridRef(drone.x, drone.y)}
+          <span suppressHydrationWarning className="ml-auto hidden font-mono text-[11px] tabular-nums text-muted-foreground sm:block">
+            {gridRef(drone.lat, drone.lng)}
           </span>
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-[1400px] gap-3 p-3 lg:grid-cols-[340px_minmax(0,1fr)]">
-        {/* profile */}
-        <div className="space-y-3">
+      {/* trajectory prediction — full width */}
+      <div className="mx-auto w-full max-w-[1400px] shrink-0 px-3 pt-3">
+        <Panel title="Trajectory Prediction">
+          <div className="flex flex-wrap items-center gap-4">
+            <Compass className="h-8 w-8 shrink-0" style={{ color }} />
+            <p className="text-sm font-bold tracking-wider" style={{ color }}>
+              {etaText(eta)}
+            </p>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] tracking-widest text-muted-foreground uppercase sm:grid-cols-4">
+            {ZONES.map((z) => (
+              <div key={z.id} className="border border-border px-2 py-1.5">
+                <div className="text-foreground">ZONE {z.name}</div>
+                <div>{z.restricted ? "RESTRICTED" : "PATROL"}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+            <div className="text-[10px] tracking-widest text-muted-foreground mb-2">TRAJECTORY ANALYSIS</div>
+
+            <div className="flex justify-between mb-1">
+              <span className="text-xs text-red-400">BREACH PROBABILITY</span>
+              <span className="text-xs font-bold text-red-400">{prediction.breachProbability}%</span>
+            </div>
+            <div className="w-full bg-gray-800 h-1 mb-3">
+              <div className="bg-red-500 h-1 transition-all duration-500" style={{ width: `${prediction.breachProbability}%` }} />
+            </div>
+
+            <div className="flex justify-between mb-1">
+              <span className="text-xs text-green-400">SAFE CORRIDOR</span>
+              <span className="text-xs font-bold text-green-400">{prediction.safeProbability}%</span>
+            </div>
+            <div className="w-full bg-gray-800 h-1">
+              <div className="bg-green-500 h-1 transition-all duration-500" style={{ width: `${prediction.safeProbability}%` }} />
+            </div>
+
+            {prediction.breachZone && (
+              <div className="mt-3 text-[10px] text-amber-400 tracking-widest">
+                PREDICTED ZONE: {prediction.breachZone.name} — ETA {prediction.breachInSeconds}s
+              </div>
+            )}
+          </div>
+        </Panel>
+      </div>
+
+      {/* middle row — profile + actions | mini map | speed | altitude */}
+      <div className="mx-auto mt-3 flex w-full max-w-[1400px] flex-col border-t border-white/10 lg:min-h-0 lg:flex-1 lg:flex-row">
+        {/* Left panel — Track Profile + Operator Actions; scrolls inside itself if the screen is short */}
+        <div className="flex shrink-0 flex-col gap-3 border-white/10 p-3 lg:w-[220px] lg:overflow-y-auto lg:border-r">
           <Panel title="Track Profile">
             <dl className="space-y-2.5 text-[11px] tracking-wider uppercase">
               {[
@@ -110,13 +167,13 @@ function DroneDetail() {
                 ["Velocity", `${Math.round(drone.speed)} KM/H`],
                 ["Altitude", `${Math.round(drone.altitude)} M AGL`],
                 ["Heading", fmtHeading(drone.heading)],
-                ["Grid", gridRef(drone.x, drone.y)],
+                ["Grid", gridRef(drone.lat, drone.lng)],
                 ["Battery", `${Math.round(drone.battery)}%`],
                 ["Signal", `${Math.round(drone.signal)}% LINK`],
               ].map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between border-b border-border/60 pb-1.5">
                   <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="font-bold text-foreground">{v}</dd>
+                  <dd className="font-mono font-bold text-foreground">{v}</dd>
                 </div>
               ))}
               <div className="flex items-center justify-between">
@@ -161,53 +218,24 @@ function DroneDetail() {
           </Panel>
         </div>
 
-        {/* prediction + vitals */}
-        <div className="space-y-3">
-          <Panel title="Trajectory Prediction">
-            <div className="flex flex-wrap items-center gap-4">
-              <Compass className="h-8 w-8 shrink-0" style={{ color }} />
-              <p className="text-sm font-bold tracking-wider" style={{ color }}>
-                {etaText(eta)}
-              </p>
+        {/* Right: 3 equal squares */}
+        <div className="flex h-[220px] min-w-0 flex-1 lg:h-auto">
+          {/* Mini Map */}
+          <div className="relative min-w-0 flex-1 border-r border-white/10">
+            {mapReady && (
+              <Suspense fallback={null}>
+                <DroneMiniMap drone={drone} />
+              </Suspense>
+            )}
+          </div>
+
+          {/* Speed Chart */}
+          <div className="flex min-w-0 flex-1 flex-col border-r border-white/10">
+            <div className="flex shrink-0 items-center justify-between px-3 pt-2 text-[9px] tracking-widest text-white/40" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+              VITALS // SPEED
+              <Gauge className="h-3.5 w-3.5 text-muted-foreground" />
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] tracking-widest text-muted-foreground uppercase sm:grid-cols-4">
-              {ZONES.map((z) => (
-                <div key={z.id} className="border border-border px-2 py-1.5">
-                  <div className="text-foreground">ZONE {z.name}</div>
-                  <div>{z.restricted ? "RESTRICTED" : "PATROL"}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-              <div className="text-[10px] tracking-widest text-muted-foreground mb-2">TRAJECTORY ANALYSIS</div>
-
-              <div className="flex justify-between mb-1">
-                <span className="text-xs text-red-400">BREACH PROBABILITY</span>
-                <span className="text-xs font-bold text-red-400">{prediction.breachProbability}%</span>
-              </div>
-              <div className="w-full bg-gray-800 h-1 mb-3">
-                <div className="bg-red-500 h-1 transition-all duration-500" style={{ width: `${prediction.breachProbability}%` }} />
-              </div>
-
-              <div className="flex justify-between mb-1">
-                <span className="text-xs text-green-400">SAFE CORRIDOR</span>
-                <span className="text-xs font-bold text-green-400">{prediction.safeProbability}%</span>
-              </div>
-              <div className="w-full bg-gray-800 h-1">
-                <div className="bg-green-500 h-1 transition-all duration-500" style={{ width: `${prediction.safeProbability}%` }} />
-              </div>
-
-              {prediction.breachZone && (
-                <div className="mt-3 text-[10px] text-amber-400 tracking-widest">
-                  PREDICTED ZONE: {prediction.breachZone.name} — ETA {prediction.breachInSeconds}s
-                </div>
-              )}
-            </div>
-          </Panel>
-
-          <Panel title="Vitals // Speed — last 60s" right={<Gauge className="h-3.5 w-3.5 text-muted-foreground" />}>
-            <div className="h-[220px] w-full">
+            <div className="min-h-0 flex-1">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: -18 }}>
                   <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
@@ -227,10 +255,15 @@ function DroneDetail() {
                 </LineChart>
               </ResponsiveContainer>
             </div>
-          </Panel>
+          </div>
 
-          <Panel title="Vitals // Altitude — last 60s" right={<BatteryMedium className="h-3.5 w-3.5 text-muted-foreground" />}>
-            <div className="h-[220px] w-full">
+          {/* Altitude Chart */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex shrink-0 items-center justify-between px-3 pt-2 text-[9px] tracking-widest text-white/40" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+              VITALS // ALTITUDE
+              <BatteryMedium className="h-3.5 w-3.5 text-muted-foreground" />
+            </div>
+            <div className="min-h-0 flex-1">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: -18 }}>
                   <defs>
@@ -256,32 +289,53 @@ function DroneDetail() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          </Panel>
+          </div>
+        </div>
+      </div>
 
-          <Panel title="Live Telemetry">
-            <div className="grid grid-cols-3 gap-2 text-center text-[11px] tracking-widest uppercase">
-              <div className="border border-border py-2">
-                <Radio className="mx-auto h-3.5 w-3.5 text-muted-foreground" />
-                <div className="mt-1 font-bold text-foreground tabular-nums">{Math.round(drone.speed)} KM/H</div>
-                <div className="text-[9px] text-muted-foreground">Velocity</div>
+      {/* live telemetry — full width, pinned to the bottom */}
+      <div className="mx-auto w-full max-w-[1400px] shrink-0 px-3 pb-3">
+        <Panel title="Live Telemetry">
+          <div className="grid grid-cols-2 gap-2 text-center text-[11px] tracking-widest uppercase sm:grid-cols-4">
+            <div className="border border-border py-2">
+              <Radio className="mx-auto h-3.5 w-3.5 text-muted-foreground" />
+              <div className="mt-1 font-mono font-bold text-foreground tabular-nums">{Math.round(drone.speed)} KM/H</div>
+              <div className="text-[9px] text-muted-foreground">Velocity</div>
+            </div>
+            <motion.div
+              key={Math.round(drone.altitude)}
+              initial={{ opacity: 0.4 }}
+              animate={{ opacity: 1 }}
+              className="border border-border py-2"
+            >
+              <div className="font-mono font-bold text-foreground tabular-nums">{Math.round(drone.altitude)} M</div>
+              <div className="text-[9px] text-muted-foreground">Altitude</div>
+            </motion.div>
+            <div className="border border-border py-2">
+              <div className="font-mono font-bold text-foreground tabular-nums">{fmtHeading(drone.heading)}</div>
+              <div className="text-[9px] text-muted-foreground">Heading</div>
+            </div>
+            <div className="flex flex-col justify-center border border-border px-4 py-2 text-left">
+              <div className="mb-2 text-[9px] tracking-widest text-white/35" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                NEARBY ZONES
               </div>
-              <motion.div
-                key={Math.round(drone.altitude)}
-                initial={{ opacity: 0.4 }}
-                animate={{ opacity: 1 }}
-                className="border border-border py-2"
-              >
-                <div className="font-bold text-foreground tabular-nums">{Math.round(drone.altitude)} M</div>
-                <div className="text-[9px] text-muted-foreground">Altitude</div>
-              </motion.div>
-              <div className="border border-border py-2">
-                <div className="font-bold text-foreground tabular-nums">{fmtHeading(drone.heading)}</div>
-                <div className="text-[9px] text-muted-foreground">Heading</div>
+              <div className="flex flex-col gap-1">
+                {nearbyZones.map((zone) => (
+                  <div key={zone.id} className="flex items-center gap-2">
+                    <span className={`h-1.5 w-1.5 rounded-full ${zone.restricted ? 'bg-red-400' : 'bg-green-400'}`} />
+                    <span className="text-[11px] font-bold text-white/80" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                      {zone.name}
+                    </span>
+                  </div>
+                ))}
+                {nearbyZones.length === 0 && (
+                  <span className="text-[10px] text-white/25" style={{ fontFamily: "'JetBrains Mono', monospace" }}>NONE IN RANGE</span>
+                )}
               </div>
             </div>
-          </Panel>
-        </div>
-      </main>
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }

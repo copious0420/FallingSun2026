@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /** Framed HUD panel with military corner brackets and a header strip. */
@@ -8,15 +8,17 @@ export function Panel({
   children,
   className,
   bodyClassName,
+  style,
 }: {
   title?: string;
   right?: ReactNode;
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
+  style?: CSSProperties;
 }) {
   return (
-    <section className={cn("relative border border-border bg-card/80", className)}>
+    <section className={cn("relative border border-border bg-card/80", className)} style={style}>
       <span aria-hidden className="absolute -top-px -left-px h-2 w-2 border-t-2 border-l-2 border-primary" />
       <span aria-hidden className="absolute -top-px -right-px h-2 w-2 border-t-2 border-r-2 border-primary" />
       <span aria-hidden className="absolute -bottom-px -left-px h-2 w-2 border-b-2 border-l-2 border-primary" />

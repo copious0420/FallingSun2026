@@ -3,7 +3,7 @@ import { useSimulator } from "@/hooks/useSimulator";
 import { effectiveThreat, fmtClock } from "@/lib/simulator";
 
 export function TopBar() {
-  const { drones, clock, version } = useSimulator();
+  const { drones, clock, elapsed } = useSimulator();
   const threatCount = drones.filter((d) => {
     const t = effectiveThreat(d);
     return t === "HIGH" || t === "CRITICAL";
@@ -29,18 +29,18 @@ export function TopBar() {
           <div className="flex items-center gap-2">
             <Satellite className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-muted-foreground">Tracked</span>
-            <span className="font-bold text-foreground">{drones.length}</span>
+            <span className="font-mono font-bold text-foreground">{drones.length}</span>
           </div>
           <div className="flex items-center gap-2">
             <TriangleAlert className="h-3.5 w-3.5 text-hud-amber" />
             <span className="text-muted-foreground">Threats</span>
-            <span className={threatCount > 0 ? "font-bold text-hud-red" : "font-bold text-hud-green"}>
+            <span className={threatCount > 0 ? "font-mono font-bold text-hud-red" : "font-mono font-bold text-hud-green"}>
               {threatCount}
             </span>
           </div>
           <div className="hidden items-center gap-2 sm:flex">
             <span className="text-muted-foreground">Critical</span>
-            <span className={critical > 0 ? "font-bold text-hud-red glow-red" : "font-bold text-foreground"}>
+            <span className={critical > 0 ? "font-mono font-bold text-hud-red glow-red" : "font-mono font-bold text-foreground"}>
               {critical}
             </span>
           </div>
@@ -52,12 +52,12 @@ export function TopBar() {
             <span className="text-hud-green">SYS Operational</span>
           </div>
           <div className="hidden border-l border-border pl-5 sm:block">
-            <span suppressHydrationWarning className="font-bold text-foreground tabular-nums">
+            <span suppressHydrationWarning className="font-mono font-bold text-foreground tabular-nums">
               {fmtClock(clock)}
             </span>
             <span className="ml-2 text-muted-foreground">UTC+5:30</span>
           </div>
-          <span className="hidden text-muted-foreground tabular-nums md:inline">T+{version}s</span>
+          <span className="hidden font-mono text-muted-foreground tabular-nums md:inline">T+{elapsed}s</span>
         </div>
       </div>
     </header>

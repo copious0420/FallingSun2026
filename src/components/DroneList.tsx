@@ -16,15 +16,23 @@ export function DroneList() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="max-h-[420px] flex-1 space-y-1.5 overflow-y-auto pr-1 lg:max-h-[calc(100vh-190px)]">
+      <div className="max-h-[420px] flex-1 space-y-3 overflow-y-auto pr-1 lg:max-h-[calc(100vh-190px)]">
         {sorted.map((d) => {
           const level = effectiveThreat(d);
+          const rows: Array<[string, string]> = [
+            ["Model", d.model],
+            ["Spd", `${Math.round(d.speed)} KM/H`],
+            ["Alt", `${Math.round(d.altitude)} M`],
+            ["Hdg", fmtHeading(d.heading)],
+            ["Grid", gridRef(d.lat, d.lng)],
+          ];
           return (
             <button
               key={d.id}
               onClick={() => navigate({ to: "/drones/$id", params: { id: d.id } })}
               className={cn(
-                "group relative block w-full border border-border bg-secondary/30 px-3 py-2 text-left transition-colors hover:border-primary/50 hover:bg-accent/60",
+                // glass card — kept as classes (not inline style) so the hover background still applies
+                "group relative block w-full border border-white/[0.07] bg-[rgba(15,23,42,0.6)] px-3 py-3 text-left leading-relaxed backdrop-blur-[8px] transition-colors hover:border-primary/50 hover:bg-accent/60",
               )}
             >
               <span
@@ -32,21 +40,23 @@ export function DroneList() {
                 className="absolute top-0 bottom-0 left-0 w-[3px]"
                 style={{ background: threatColor(level) }}
               />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold tracking-wider text-foreground">{d.id}</span>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-mono text-[12px] font-bold tracking-wider text-foreground">{d.id}</span>
                 <ThreatBadge level={level} />
               </div>
-              <div className="mt-1 flex items-center justify-between text-[10px] tracking-wider text-muted-foreground uppercase">
-                <span>{d.model}</span>
-                <span className="flex items-center gap-1">
-                  {Math.round(d.speed)} KM/H
-                  <ChevronsRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100 text-primary" />
-                </span>
-              </div>
-              <div className="mt-0.5 flex items-center justify-between text-[10px] tabular-nums text-muted-foreground">
-                <span>ALT {Math.round(d.altitude)}M</span>
-                <span>{fmtHeading(d.heading)}</span>
-                <span>{gridRef(d.x, d.y)}</span>
+              <div className="border-t border-white/8 mt-2 pt-2" />
+              <div className="space-y-1.5 text-[10px] tracking-wider">
+                {rows.map(([label, value], i) => (
+                  <div key={label} className="flex items-center justify-between gap-2">
+                    <span className="text-white/35 uppercase">{label}</span>
+                    <span className="flex items-center gap-1 font-mono tabular-nums text-white/80">
+                      {value}
+                      {i === 0 && (
+                        <ChevronsRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100 text-primary" />
+                      )}
+                    </span>
+                  </div>
+                ))}
               </div>
             </button>
           );

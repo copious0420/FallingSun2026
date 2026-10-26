@@ -28,7 +28,7 @@ export function DroneMiniMap({ drone }: { drone: Drone }) {
       boxZoom: false,
       keyboard: false,
     });
-    L.tileLayer("https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png", { maxZoom: 18 }).addTo(map);
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", { maxZoom: 18 }).addTo(map);
 
     for (const zone of getAllZones()) {
       const zc = zone.restricted ? "#ef4444" : "#22c55e";

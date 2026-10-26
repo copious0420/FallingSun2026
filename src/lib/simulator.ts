@@ -180,7 +180,7 @@ drones.push({
   flagged: null,
   speedHistory: Array(60).fill(28),
   altitudeHistory: Array(60).fill(120),
-  positionHistory: Array(8).fill({ x: 50, y: 85 }),
+  positionHistory: Array.from({ length: 8 }, () => ({ x: 50, y: 85 })),
   waypointTicks: 999,
 });
 
@@ -436,6 +436,15 @@ export function predictTrajectory(d: Drone): TrajectoryPrediction {
     vy /= weightSum;
   }
 
+  // MANUAL-01 history is sampled at ~60fps, not 1-tick intervals
+  // Scale up velocity to match autonomous drone projection scale
+  const isManual = d.id === "MANUAL-01";
+  if (isManual) {
+    const scale = 8; // approximate frames-per-tick ratio
+    vx *= scale;
+    vy *= scale;
+  }
+
   // Project 40 steps forward.
   const points: Array<{ x: number; y: number }> = [];
   let cx = d.x;
@@ -464,7 +473,7 @@ export function predictTrajectory(d: Drone): TrajectoryPrediction {
           droneId: d.id,
           points,
           breachZone: z,
-          breachInSeconds: (i + 1) * (TICK_MS / 1000),
+          breachInSeconds: isManual ? Math.round((i + 1) / 8) : (i + 1) * (TICK_MS / 1000),
           breachProbability: probability,
         };
       }

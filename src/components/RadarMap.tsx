@@ -49,7 +49,7 @@ export function RadarMap() {
   }, []);
 
   return (
-    <div className="relative mx-auto aspect-square w-full max-w-[860px] overflow-hidden border border-border bg-[#050505]">
+    <div className="relative mx-auto aspect-square w-full max-w-[600px] overflow-hidden border border-border bg-[#050505]">
       {/* radar sweep */}
       <div
         aria-hidden

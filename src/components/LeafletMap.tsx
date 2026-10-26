@@ -22,7 +22,7 @@ export type ZoneDrawMode = "none" | "add" | "remove";
 const CENTER: L.LatLngExpression = [DELHI_CENTER.lat, DELHI_CENTER.lng];
 const DEFAULT_ZOOM = 12;
 
-const DARK_TILES = "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png";
+const DARK_TILES = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}";
 const DARK_ATTRIBUTION = '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>';
 const SAT_TILES = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const SAT_ATTRIBUTION = "&copy; Esri";
